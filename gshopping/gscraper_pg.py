@@ -286,6 +286,9 @@ def insert_to_postgres(product_results, seller_results):
                 elif status_lower == 'captcha_failed':
                     scr_status = 'pending'
                     err_msg = 'Captcha failed'
+                elif status_lower in ('no_products', 'no_match'):
+                    scr_status = status_lower
+                    err_msg = r.get('last_response', 'No products found')
                 else:
                     scr_status = 'error'
                     err_msg = r.get('last_response', 'Scrape failed to return data')
@@ -725,11 +728,13 @@ def reset_invalid_url_products_for_retry():
         cursor = conn.cursor()
         
         # Select target product IDs that have invalid URLs (e.g. 1stopbedrooms or not ibp/share URLs)
+        # Exclude products that failed with 'no_products' or 'no_match' status
         select_query = """
             SELECT product_id
             FROM product_scraping_results
             WHERE product_url NOT LIKE 'https://www.google.com/search?ibp=oshop%%'
               AND product_url NOT LIKE 'https://share.google/%%'
+              AND status NOT IN ('no_products', 'no_match')
         """
         cursor.execute(select_query)
         target_ids = [row[0] for row in cursor.fetchall()]
