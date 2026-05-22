@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import zipfile
-import ftplib
 import traceback
 from datetime import datetime
 from urllib.parse import urlparse
@@ -93,61 +92,81 @@ def get_site_display_and_is_me_batch(comp_list, sel_list, s_url_list, b_url_list
         
     return site_displays, is_me_list
 
-def upload_to_ftp(ftp_host, ftp_port, ftp_user, ftp_pass, ftp_path, local_file, remote_filename):
-    try:
-        print(f"Connecting to FTP server {ftp_host}:{ftp_port}...")
-        ftp = ftplib.FTP()
-        ftp.connect(ftp_host, ftp_port, timeout=30)
-        ftp.login(ftp_user, ftp_pass)
-        ftp.set_pasv(True)
+def upload_to_oracle_sftp(local_file, remote_filename):
+    ssh_key_path = os.environ.get("ORACLE_SFTP_KEY_PATH")
+    private_key_content = os.environ.get("ORACLE_SFTP_PRIVATE_KEY")
+    remote_host = os.environ.get("ORACLE_SFTP_HOST")
+    remote_user = os.environ.get("ORACLE_SFTP_USER")
+    remote_dir = os.environ.get("ORACLE_SFTP_REMOTE_DIR")
+    
+    # If the key path variable itself contains the actual key contents, redirect it
+    if ssh_key_path and ssh_key_path.strip().startswith("-----BEGIN"):
+        private_key_content = ssh_key_path
+        ssh_key_path = None
         
-        print(f"Navigating to {ftp_path}...")
-        parts = [p for p in ftp_path.split('/') if p]
-        current = ""
-        for part in parts:
-            current += "/" + part
-            try:
-                ftp.cwd(current)
-            except Exception:
-                print(f"Creating directory {current}...")
-                try:
-                    ftp.mkd(current)
-                    ftp.cwd(current)
-                except Exception as e:
-                    print(f"Failed to create directory {current}: {e}")
-                    raise
-                    
-        try:
-            ftp.delete(remote_filename)
-            print(f"Deleted existing remote file: {remote_filename}")
-        except Exception:
-            pass
-            
-        print(f"Uploading {local_file} as {remote_filename}...")
-        with open(local_file, 'rb') as f:
-            ftp.storbinary(f'STOR {remote_filename}', f)
-            
-        ftp.quit()
-        print(f"✓ Successfully uploaded {remote_filename} to FTP folder {ftp_path}")
-        return True
-    except Exception as e:
-        print(f"Error uploading to FTP: {e}")
-        traceback.print_exc()
+    if not (ssh_key_path or private_key_content) or not all([remote_host, remote_user, remote_dir]):
+        print("❌ Failed to upload to Oracle server: Missing SFTP configuration in environment variables.")
         return False
+        
+    temp_key_file = None
+    try:
+        if private_key_content:
+            import tempfile
+            fd, temp_key_file = tempfile.mkstemp(prefix="oracle_ssh_")
+            with os.fdopen(fd, 'w') as f:
+                f.write(private_key_content.strip() + "\n")
+            os.chmod(temp_key_file, 0o600)
+            ssh_key_path = temp_key_file
+        else:
+            ssh_key_path = os.path.expanduser(ssh_key_path)
+            
+        print(f"Uploading {local_file} to Oracle Server {remote_dir}...")
+        
+        cmd = [
+            "scp",
+            "-i", ssh_key_path,
+            "-o", "StrictHostKeyChecking=no",
+            local_file,
+            f"{remote_user}@{remote_host}:{remote_dir}/{remote_filename}"
+        ]
+        
+        import subprocess
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print("✓ Successfully uploaded to Oracle server over SCP!")
+        
+        # Expose and print the HTTP URL
+        web_dir = "/var/www/html/"
+        web_path = ""
+        if remote_dir.startswith(web_dir):
+            web_path = remote_dir[len(web_dir):].rstrip('/')
+            
+        http_url = f"http://{remote_host}{web_path}/{remote_filename}"
+        print(f"🔗 File is exposed at: Server")
+        
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to upload to Oracle server: {e.stderr}")
+        return False
+    except Exception as e:
+        print(f"Error executing scp command: {e}")
+        return False
+    finally:
+        if temp_key_file and os.path.exists(temp_key_file):
+            try:
+                os.remove(temp_key_file)
+            except Exception:
+                pass
 
 def main():
+    if os.environ.get("ORACLE_SFTP_UPLOAD") != "1":
+        print("Skipping export generation and upload because ORACLE_SFTP_UPLOAD is not set to '1'.")
+        sys.exit(0)
+
     pg_host = os.environ.get("PG_HOST")
     pg_port = os.environ.get("PG_PORT", "5432")
     pg_user = os.environ.get("PG_USER")
     pg_pass = os.environ.get("PG_PASS")
     pg_db = os.environ.get("PG_DB")
-
-    ftp_host = os.environ.get("FTP_HOST")
-    ftp_port = int(os.environ.get("FTP_PORT", "21"))
-    ftp_user = os.environ.get("FTP_USER")
-    ftp_pass = os.environ.get("FTP_PASS")
-    ftp_path = "/scrap/google"
-
     if not all([pg_host, pg_user, pg_pass, pg_db]):
         print("Error: Missing database credentials in environment variables.")
         sys.exit(1)
@@ -488,30 +507,18 @@ def main():
     except Exception as e:
         print(f"Warning: Failed to clean up CSV files: {e}")
 
-    # FTP Upload
-    if ftp_host and ftp_user and ftp_pass:
-        success = upload_to_ftp(
-            ftp_host=ftp_host,
-            ftp_port=ftp_port,
-            ftp_user=ftp_user,
-            ftp_pass=ftp_pass,
-            ftp_path=ftp_path,
-            local_file=zip_path,
-            remote_filename=zip_filename
-        )
-        if success:
-            print("✓ Export and upload completed successfully!")
-            try:
-                os.remove(zip_path)
-            except:
-                pass
-            sys.exit(0)
-        else:
-            print("❌ FTP Upload failed.")
-            sys.exit(1)
-    else:
-        print("Warning: Missing FTP credentials. Zip file kept locally.")
+    # SFTP upload to Oracle server
+    oracle_success = upload_to_oracle_sftp(zip_path, zip_filename)
+    if oracle_success:
+        print("✓ Export and SFTP upload completed successfully!")
+        try:
+            os.remove(zip_path)
+        except Exception as e:
+            print(f"Warning: Failed to remove local ZIP file: {e}")
         sys.exit(0)
+    else:
+        print("❌ SFTP upload failed.")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
