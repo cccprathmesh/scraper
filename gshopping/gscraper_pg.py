@@ -960,7 +960,7 @@ def verify_and_claim_product(product_id, worker_id=None, ttl_minutes=60):
         if not supports_claims:
             # Fallback simple check/claim
             cursor.execute(
-                "SELECT scraping_status FROM osb_products WHERE product_id = %s",
+                "SELECT scraping_status FROM osb_products WHERE product_id = %s AND status = 1",
                 (str(product_id),)
             )
             row = cursor.fetchone()
@@ -976,7 +976,7 @@ def verify_and_claim_product(product_id, worker_id=None, ttl_minutes=60):
             
             # Atomically set to claimed
             cursor.execute(
-                "UPDATE osb_products SET scraping_status = %s, last_attempt = NOW() WHERE product_id = %s AND scraping_status = %s",
+                "UPDATE osb_products SET scraping_status = %s, last_attempt = NOW() WHERE product_id = %s AND scraping_status = %s AND status = 1",
                 (CLAIM_STATUS, str(product_id), PENDING_STATUS)
             )
             claimed = cursor.rowcount > 0
@@ -994,6 +994,7 @@ def verify_and_claim_product(product_id, worker_id=None, ttl_minutes=60):
                 claimed_at = NOW(),
                 last_attempt = NOW()
             WHERE product_id = %s
+              AND status = 1
               AND (
                   scraping_status = %s
                   OR (scraping_status = %s AND claimed_by = %s)
@@ -1167,25 +1168,45 @@ def generate_reconciliation_report(output_path):
 
         conn = psycopg2.connect(host=pg_host, port=pg_port, user=pg_user, password=pg_pass, dbname=pg_db)
         
-        # Fetch only products that have been scraped (non-pending status)
-        products_df = pd.read_sql("SELECT product_id, name, gtin, brand, product_type AS category, keyword, url, scraping_status FROM osb_products WHERE scraping_status != 'pending'", conn)
-        results_df = pd.read_sql("SELECT product_id, google_title AS product_name, seller_count, osb_position, updated_at, google_seller_page_url AS url, osb_url_match FROM google_shopping_results", conn)
-        sellers_df = pd.read_sql("""
+        # Fetch only products that have been scraped (non-pending status) and are active (status = 1)
+        products_df = pd.read_sql("SELECT product_id, name, gtin, brand, product_type AS category, keyword, url, scraping_status FROM osb_products WHERE scraping_status != 'pending' AND status = 1", conn)
+        results_df = pd.read_sql(
+            """
             SELECT 
-                product_id AS product_code, 
-                seller_name, 
-                price AS seller_price, 
-                seller_url, 
-                stock_status,
-                original_price,
-                discount_amount,
-                coupon_code,
-                coupon_remark,
-                seller_rating,
-                delivery_tagline,
-                google_position
-            FROM google_shopping_sellers
-        """, conn)
+                r.product_id, 
+                r.google_title AS product_name, 
+                r.seller_count, 
+                r.osb_position, 
+                r.updated_at, 
+                r.google_seller_page_url AS url, 
+                r.osb_url_match 
+            FROM google_shopping_results r
+            JOIN osb_products p ON r.product_id = p.product_id
+            WHERE p.status = 1
+            """,
+            conn
+        )
+        sellers_df = pd.read_sql(
+            """
+            SELECT 
+                s.product_id AS product_code, 
+                s.seller_name, 
+                s.price AS seller_price, 
+                s.seller_url, 
+                s.stock_status,
+                s.original_price,
+                s.discount_amount,
+                s.coupon_code,
+                s.coupon_remark,
+                s.seller_rating,
+                s.delivery_tagline,
+                s.google_position
+            FROM google_shopping_sellers s
+            JOIN osb_products p ON s.product_id = p.product_id
+            WHERE p.status = 1
+            """,
+            conn
+        )
         conn.close()
 
         if products_df.empty:

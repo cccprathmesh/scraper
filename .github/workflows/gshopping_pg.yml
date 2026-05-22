@@ -244,3 +244,19 @@ jobs:
             });
 
             core.info(`Triggered next round depth=${nextDepth}`);
+
+      - name: Generate and upload reports if no products remaining
+        if: steps.check_rem.outputs.has_remaining == 'false'
+        env:
+          PG_HOST: ${{ secrets.PG_HOST }}
+          PG_PORT: ${{ secrets.PG_PORT }}
+          PG_USER: ${{ secrets.PG_USER }}
+          PG_PASS: ${{ secrets.PG_PASS }}
+          PG_DB: ${{ secrets.PG_DB }}
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_PORT: ${{ secrets.FTP_PORT }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
+        run: |
+          python gshopping/export_reports.py
+
