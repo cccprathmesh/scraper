@@ -601,15 +601,9 @@ def insert_to_postgres(product_results, seller_results):
                 elif status_lower == 'completed' or status_lower == 'product_found':
                     scr_status = 'completed'
                     err_msg = None
-                elif status_lower == 'captcha_failed':
-                    scr_status = 'pending'
-                    err_msg = 'Captcha failed'
-                elif status_lower in ('no_products', 'no_match'):
-                    scr_status = status_lower
-                    err_msg = r.get('last_response', 'No products found')
                 else:
                     scr_status = 'error'
-                    err_msg = r.get('last_response', 'Scrape failed to return data')
+                    err_msg = r.get('last_response') or f"Scrape ended with status: {status_lower}"
                 
                 status_values.append((p_id, scr_status, err_msg))
 
@@ -989,7 +983,7 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
                 error_message = NULL
             FROM picked
             WHERE p.product_id = picked.product_id
-            RETURNING p.product_id, p.web_id, p.name, p.sku AS mpn_sku, p.gtin, p.brand, p.product_type AS category, p.keyword, p.url, p.osb_url, p.status, p.mfr_sales_30d AS "30daymfrsales", p.scraping_status, p.claimed_by, p.claimed_at, p.last_attempt, p.error_message, p.created_at, p.updated_at
+            RETURNING p.product_id, p.web_id, p.name, p.sku AS mpn_sku, p.gtin, p.brand, p.product_type AS category, p.keyword, p.url, p.osb_url, p.status, p.mfr_sales_30d AS "30daymfrsales", p.scraping_status, p.claimed_by, p.claimed_at, p.last_attempt, p.error_message, p.created_at, p.updated_at, p.color, p.bed_size_measure, p.mattress_size
             """,
             (PENDING_STATUS, int(limit), CLAIM_STATUS, worker_id),
         )
@@ -1105,7 +1099,7 @@ def claim_specific_products_from_db(product_ids, worker_id=None, limit=30, ttl_m
                 error_message = NULL
             FROM picked
             WHERE p.product_id = picked.product_id
-            RETURNING p.product_id, p.web_id, p.name, p.sku AS mpn_sku, p.gtin, p.brand, p.product_type AS category, p.keyword, p.url, p.osb_url, p.status, p.mfr_sales_30d AS "30daymfrsales", p.scraping_status, p.claimed_by, p.claimed_at, p.last_attempt, p.error_message, p.created_at, p.updated_at
+            RETURNING p.product_id, p.web_id, p.name, p.sku AS mpn_sku, p.gtin, p.brand, p.product_type AS category, p.keyword, p.url, p.osb_url, p.status, p.mfr_sales_30d AS "30daymfrsales", p.scraping_status, p.claimed_by, p.claimed_at, p.last_attempt, p.error_message, p.created_at, p.updated_at, p.color, p.bed_size_measure, p.mattress_size
             """,
             (product_ids, PENDING_STATUS, int(limit), CLAIM_STATUS, worker_id),
         )
@@ -1137,7 +1131,7 @@ def get_pending_chunk_from_db(limit, offset):
         conn = psycopg2.connect(host=pg_host, port=pg_port, user=pg_user, password=pg_pass, dbname=pg_db)
         # Fetch only the assigned chunk's slice, ordered by sales descending
         query = """
-            SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS "30daymfrsales", scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at
+            SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS "30daymfrsales", scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size
             FROM osb_products 
             WHERE scraping_status = 'pending' AND status = 1
             ORDER BY mfr_sales_30d DESC NULLS LAST, product_id ASC
@@ -1337,6 +1331,9 @@ def reset_error_products_to_pending():
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE osb_products SET scraping_status = 'pending', claimed_at = NULL, claimed_by = NULL WHERE scraping_status = 'error'"
+        )
+        cursor.execute(
+            "UPDATE google_shopping_results SET google_seller_page_url = NULL WHERE status IN ('selection_error', 'product_not_clickable', 'no_products', 'captcha_failed')"
         )
         conn.commit()
         affected_rows = cursor.rowcount
@@ -3275,84 +3272,133 @@ def scrape_product_directly(driver, product_id, keyword, product_url, osb_url=""
         })
         return result
 
-def scrape_product(driver, product_id, keyword, url, osb_url=""):
-    """Scrape individual product from Google Shopping"""
-    # Check if we already have a valid product_url in product_scraping_results
+def reset_cached_product_url(product_id):
+    """Reset the google_seller_page_url in google_shopping_results to NULL for this product."""
+    conn = None
+    cursor = None
+    try:
+        conn = _get_pg_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE google_shopping_results SET google_seller_page_url = NULL WHERE product_id = %s",
+            (str(product_id),)
+        )
+        conn.commit()
+        print(f"✓ Reset google_seller_page_url for product {product_id} to NULL.")
+    except Exception as e:
+        print(f"Error resetting google_seller_page_url for {product_id}: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def build_fallback_search_url(name, bed_size_measure=None, mattress_size=None):
+    """
+    Build a broad fallback search URL:
+    - Removes '1stopbedrooms'
+    - Removes 'color' and 'mpn' (part)
+    Only searches: {name} "{bed_size_measure}" "{mattress_size}"
+    """
+    parts = [_decode_html_entities(name)]
+    if bed_size_measure and str(bed_size_measure).strip():
+        parts.append(f'"{str(bed_size_measure).strip()}"')
+    if mattress_size and str(mattress_size).strip():
+        parts.append(f'"{str(mattress_size).strip()}"')
+    query = ' '.join(parts).replace(' ', '+').replace('#', '')
+    return f'https://www.google.com/search?q={query}&udm=28&gl=US&hl=en&pws=0'
+
+def scrape_product(driver, product_id, keyword, url, osb_url="", name="", mpn_sku="", color="", bed_size_measure="", mattress_size=""):
+    """Scrape individual product from Google Shopping with multi-step search retries."""
+    # 1. Check if we already have a valid product_url in product_scraping_results
     existing_product_url = get_existing_product_url_from_db(product_id)
     if existing_product_url:
-        return scrape_product_directly(driver, product_id, keyword, existing_product_url, osb_url)
-
-    try:
-        print(f"\nScraping Product ID: {product_id}")
-        print(f"Keyword: {keyword}")
-        
-        driver.get(url)
-        
-        # Handle captcha before proceeding
-        captcha_result = handle_captcha(driver, url)
-        if captcha_result == "failed":
-            result = initialize_product_result(product_id, keyword, url)
-            result.update({
-                'last_response': 'Captcha solving failed',
-                'status': 'captcha_failed'
-            })
+        print(f"Attempting to scrape directly using cached URL: {existing_product_url}")
+        result = scrape_product_directly(driver, product_id, keyword, existing_product_url, osb_url)
+        status_lower = str(result.get('status', '')).strip().lower()
+        if status_lower in {'completed', 'product_found'}:
             return result
         
-        time.sleep(random.uniform(4, 8))
+        if status_lower in {'selection_error', 'product_not_clickable', 'no_products', 'captcha_failed', 'timeout_error', 'error'}:
+            print(f"Cached URL failed with status '{status_lower}'. Resetting cached URL and falling back to search flow.")
+            reset_cached_product_url(product_id)
+
+    # 2. Search Flow (Retry sequence)
+    last_result = None
+    
+    # Define retry attempts
+    attempts = [
+        ("Original search", url),
+    ]
+    
+    retry_url = build_retry_search_url(url)
+    if retry_url != url:
+        attempts.append(("Without 1stopbedrooms prefix", retry_url))
         
-        # Initialize result structure
-        result = initialize_product_result(product_id, keyword, url)
-        
+    fallback_url = build_fallback_search_url(name, bed_size_measure, mattress_size)
+    if fallback_url:
+        attempts.append(("Without 1stopbedrooms/color/part", fallback_url))
+
+    for phase_name, search_url in attempts:
         try:
+            print(f"\n[PID {os.getpid()}] Scraper Phase: {phase_name}")
+            print(f"Search URL: {search_url}")
+            
+            driver.get(search_url)
+            
+            # Handle captcha before proceeding
+            captcha_result = handle_captcha(driver, search_url)
+            if captcha_result == "failed":
+                result = initialize_product_result(product_id, keyword, search_url)
+                result.update({
+                    'last_response': 'Captcha solving failed',
+                    'status': 'captcha_failed'
+                })
+                last_result = result
+                continue
+            
+            time.sleep(random.uniform(4, 8))
+            
+            # Initialize result structure
+            result = initialize_product_result(product_id, keyword, search_url)
+            
             phase_result, matched = run_product_selection_phase(
-                driver, product_id, "Original search", url, result, osb_url
+                driver, product_id, phase_name, search_url, result, osb_url
             )
+            last_result = phase_result
             if matched:
                 return phase_result
-
-            retry_url = build_retry_search_url(url)
-            final_result = phase_result
-            if retry_url != url:
-                log_matching(product_id, "Retry search without 1stopbedrooms prefix")
-                phase_result, matched = run_product_selection_phase(
-                    driver, product_id, "Retry search", retry_url, result, osb_url
-                )
-                final_result = phase_result
-                if matched:
-                    return phase_result
-                if phase_result.get('status') == 'completed':
-                    return phase_result
-
-            log_matching(product_id, "Fallback -> using first product from original search")
+            
+            # Fallback to first matching product on page if not fully matched in standard mode
             fallback_result, _ = run_product_selection_phase(
-                driver, product_id, "Fallback", url, result, osb_url, fallback_first=True
+                driver, product_id, f"{phase_name} fallback", search_url, result, osb_url, fallback_first=True
             )
             if fallback_result.get('status') in {'completed', 'product_found', 'product_not_clickable', 'no_offers_found'}:
                 return fallback_result
-            return final_result
+            
+            last_result = fallback_result
+            
+        except TimeoutException as e:
+            print(f"Timeout error scraping product {product_id} in phase '{phase_name}': {str(e)}")
+            result = initialize_product_result(product_id, keyword, search_url)
+            result.update({
+                'last_response': f'Timeout Error: {str(e)}',
+                'status': 'timeout_error'
+            })
+            last_result = result
         except Exception as e:
-            result['last_response'] = f"Product selection failed: {str(e)}"
-            result['status'] = "selection_error"
-            return result
-        
-    except TimeoutException as e:
-        print(f"Timeout error scraping product {product_id}: {str(e)}")
-        traceback.print_exc()
-        result = initialize_product_result(product_id, keyword, url)
-        result.update({
-            'last_response': f'Timeout Error: {str(e)}',
-            'status': 'timeout_error'
-        })
-        return result
-    except Exception as e:
-        print(f"Error scraping product {product_id}: {str(e)}")
-        traceback.print_exc()
-        result = initialize_product_result(product_id, keyword, url)
-        result.update({
-            'last_response': f'Error: {str(e)}',
-            'status': 'error'
-        })
-        return result
+            print(f"Error scraping product {product_id} in phase '{phase_name}': {str(e)}")
+            traceback.print_exc()
+            result = initialize_product_result(product_id, keyword, search_url)
+            result.update({
+                'last_response': f'Error: {str(e)}',
+                'status': 'error'
+            })
+            last_result = result
+            
+    return last_result or initialize_product_result(product_id, keyword, url)
 
 def merge_csv_files(file_paths, output_path, sort_columns=None, expected_columns=None):
     """Merge CSV files into one output CSV."""
@@ -3569,9 +3615,15 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
                         print(f"[Thread {thread_id}] Skipping product {product_id} - already claimed/completed by another worker.")
                         continue
                     
-                    # Scrape product
                     try:
-                        scraped_data = scrape_product(driver, product_id, keyword, url, osb_url)
+                        scraped_data = scrape_product(
+                            driver, product_id, keyword, url, osb_url,
+                            name=name,
+                            mpn_sku=mpnsku,
+                            color=row.get('color'),
+                            bed_size_measure=row.get('bed_size_measure'),
+                            mattress_size=row.get('mattress_size')
+                        )
                     except Exception as e:
                         print(f"[Thread {thread_id}] Error scraping product {product_id}: {str(e)}")
                         traceback.print_exc()
