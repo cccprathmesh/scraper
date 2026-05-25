@@ -3912,7 +3912,6 @@ def main():
     
     # Handlers for dedicated utility commands
     if args.reset_errors:
-        reset_error_products_to_pending()
         reset_invalid_url_products_for_retry()
         sys.exit(0)
         
@@ -3940,7 +3939,6 @@ def main():
     total_pending = get_pending_count_from_db()
     if total_pending == 0:
         print("No pending products found in DB. All done!")
-        reset_error_products_to_pending()
         sys.exit(0)
 
     print(f"Total pending products in DB: {total_pending}")
@@ -3979,7 +3977,6 @@ def main():
             
         if chunk_df.empty:
             print("No claimable pending products found (or claim columns missing).")
-            reset_error_products_to_pending()
             sys.exit(0)
         chunk_result = process_chunk(
             chunk_df,
@@ -3991,7 +3988,6 @@ def main():
             max_workers=args.max_workers,
         )
         success = chunk_result.get("success", False)
-        reset_error_products_to_pending()
         sys.exit(0 if success else 1)
 
     # Legacy mode: calculate balanced limit and offset for this chunk.
@@ -4019,7 +4015,6 @@ def main():
     
     if chunk_df.empty:
         print(f"Chunk {args.chunk_id} has no products to process.")
-        reset_error_products_to_pending()
         sys.exit(0)
 
     chunk_result = process_chunk(
