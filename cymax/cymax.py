@@ -15,6 +15,17 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urljoin
 from pathlib import Path
 
+# Add repository root for shared imports
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 # ================= ENV =================
 
 CURR_URL = os.getenv("CURR_URL", "https://www.cymax.com").rstrip("/")
@@ -614,6 +625,21 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict, crawl
         with csv_lock:
             writer.writerow(row)
 
+        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+            try:
+                save_scraped_product(COMPETITOR_NAME, None, {
+                    "url": product_url,
+                    "name": product.get("title"),
+                    "sku": product.get("sku"),
+                    "brand": product.get("brand"),
+                    "category": product.get("category"),
+                    "price": product.get("price"),
+                    "image": product.get("image"),
+                    "status": product.get("availability")
+                })
+            except Exception:
+                pass
+
         with stats_lock:
             stats["products_fetched"] += 1
             stats["urls_processed"] += 1
@@ -692,6 +718,12 @@ def main():
         start = max(URL_OFFSET, 0)
         end = start + URL_LIMIT if URL_LIMIT > 0 else len(all_product_urls)
         urls_to_process = all_product_urls[start:end]
+
+        # Filter against MySQL Queue if DB credentials are provided
+        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+            init_c = len(urls_to_process)
+            urls_to_process = filter_pending_urls(COMPETITOR_NAME, urls_to_process)
+            log(f"MySQL DB Queue check: {init_c - len(urls_to_process):,} URLs already completed in DB. Remaining pending: {len(urls_to_process):,}")
 
         log(
             f"URL file has {len(all_product_urls)} unique URLs. "

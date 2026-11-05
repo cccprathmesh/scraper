@@ -875,6 +875,17 @@ def api_ai_reload():
         return jsonify({"error": "reload_failed", "details": str(exc)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Competitor Scraped Data Export Hub
+# ---------------------------------------------------------------------------
+try:
+    from scripts.export_competitor_csv import export_page, download_csv
+    app.add_url_rule("/export", view_func=export_page, methods=["GET"])
+    app.add_url_rule("/export/download", view_func=download_csv, methods=["GET"])
+except Exception as e:
+    print(f"Warning: Could not mount /export routes: {e}")
+
+
 if __name__ == "__main__":
     import socket
     port = int(os.environ.get("PORT", 5050))

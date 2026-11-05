@@ -38,6 +38,12 @@ try:
 except Exception:
     HAS_FTP_MANAGER = False
 
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 # ================= BYPASS MODULES =================
 
 try:
@@ -1168,6 +1174,21 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict):
             stats['products_fetched'] += 1
             if uploader:
                 uploader.on_item_scraped(stats['products_fetched'], file_handle=csv_file_handle)
+
+        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+            try:
+                save_scraped_product(COMPETITOR_NAME, None, {
+                    "url": product_url,
+                    "name": product_info.get("name"),
+                    "sku": product_info.get("sku"),
+                    "brand": product_info.get("brand"),
+                    "category": product_info.get("category"),
+                    "price": product_info.get("price"),
+                    "image": product_info.get("main_image"),
+                    "status": product_info.get("status")
+                })
+            except Exception:
+                pass
         
         log(f"Fetched product {product_info['product_id']}: {product_info['name'][:50]}...", "INFO")
         
@@ -1348,6 +1369,12 @@ def main():
         with open(URLS_FILE, "r", encoding="utf-8") as uf:
             urls_to_process = [line.strip() for line in uf if line.strip() and line.strip().startswith("http")]
         log(f"Product URLs assigned to this chunk from {URLS_FILE}: {len(urls_to_process):,}")
+
+        # Filter against MySQL Queue if DB credentials are provided
+        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+            initial_count = len(urls_to_process)
+            urls_to_process = filter_pending_urls(COMPETITOR_NAME, urls_to_process)
+            log(f"MySQL DB Queue check: {initial_count - len(urls_to_process):,} URLs already completed in DB. Remaining pending: {len(urls_to_process):,}")
 
     # Mode 2: Legacy Sitemap-offset processing (fallback)
     else:
