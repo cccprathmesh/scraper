@@ -15,14 +15,6 @@ on:
         options:
           - remaining
           - full
-      resume_unscraped_only:
-        description: "Resume mode: only scrape remaining (Not Scraped) URLs from latest FTP tracking CSV"
-        type: boolean
-        required: false
-        default: false
-      urls_per_runner:
-        description: "Max product URLs per parallel runner in resume mode"
-        default: "350"
       max_runners:
         description: "Max parallel runners (matrix jobs, max 250)"
         default: "120"
@@ -66,88 +58,6 @@ jobs:
           echo "site_name=$SITE_NAME" >> $GITHUB_OUTPUT
           echo "Site name: $SITE_NAME"
 
-      - name: Fetch unscraped URLs from FTP (Resume Mode)
-        id: fetch_ftp
-        if: ${{ github.event.inputs.resume_unscraped_only != 'false' && github.event.inputs.resume_unscraped_only != '' }}
-        env:
-          URLS_PER_RUNNER: ${{ github.event.inputs.urls_per_runner }}
-          MAX_RUNNERS: ${{ github.event.inputs.max_runners }}
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USER: ${{ secrets.FTP_USER }}
-          FTP_PASS: ${{ secrets.FTP_PASS }}
-          FTP_PORT: "21"
-          FTP_PATH: "/scrap"
-        run: |
-          python3 -c "import textwrap, sys; exec(textwrap.dedent(sys.stdin.read()))" << 'EOF'
-          import os
-          import math
-          import ftplib
-          import io
-          import csv
-
-          urls_per_runner = int(os.environ.get("URLS_PER_RUNNER", "350") or "350")
-          max_runners = int(os.environ.get("MAX_RUNNERS", "120") or "120")
-          ftp_host = os.environ.get("FTP_HOST", "").strip()
-          ftp_user = os.environ.get("FTP_USER", "").strip()
-          ftp_pass = os.environ.get("FTP_PASS", "").strip()
-          ftp_port = int(os.environ.get("FTP_PORT", "21") or "21")
-          ftp_path = os.environ.get("FTP_PATH", "/scrap").rstrip("/")
-
-          if not (ftp_host and ftp_user and ftp_pass):
-              print("Warning: FTP secrets not configured.")
-              sys.exit(0)
-
-          print(f"Connecting to FTP ({ftp_host}) to locate latest FinalURLListForScrap tracking CSV...")
-          try:
-              ftp = ftplib.FTP()
-              ftp.connect(ftp_host, ftp_port, timeout=30)
-              ftp.login(ftp_user, ftp_pass)
-              comp_dir = f"{ftp_path}/Unlimitedfurniture"
-              date_dirs = sorted([d for d in ftp.nlst(comp_dir) if d.split('/')[-1].isdigit()])
-              unscraped_urls = []
-              if date_dirs:
-                  for d in reversed(date_dirs):
-                      out_dir = f"{d}/output"
-                      try:
-                          files = ftp.nlst(out_dir)
-                          finals = [f for f in files if "FinalURLList" in f and f.endswith(".csv")]
-                          if finals:
-                              latest_final = sorted(finals)[-1]
-                              print(f"Reading tracking file: {latest_final}")
-                              bio = io.BytesIO()
-                              ftp.retrbinary(f"RETR {latest_final}", bio.write)
-                              bio.seek(0)
-                              reader = csv.reader(io.StringIO(bio.getvalue().decode('utf-8', errors='ignore')))
-                              for row in reader:
-                                  if len(row) >= 2 and row[1].strip().lower() == "not scraped":
-                                      u = row[0].strip()
-                                      path = u.split("unlimitedfurnituregroup.com/")[-1].strip("/")
-                                      if path.endswith(".html") and "/" not in path:
-                                          unscraped_urls.append(u)
-                              if unscraped_urls:
-                                  print(f"Found {len(unscraped_urls):,} 'Not Scraped' candidate products in {latest_final}")
-                                  break
-                      except Exception as e_inner:
-                          print(f"Note: {e_inner}")
-              ftp.quit()
-
-              if unscraped_urls:
-                  os.makedirs("url_chunks", exist_ok=True)
-                  total_needed = (len(unscraped_urls) + urls_per_runner - 1) // urls_per_runner
-                  num_chunks = min(total_needed, max_runners, 250)
-                  chunk_size = math.ceil(len(unscraped_urls) / num_chunks)
-                  for i in range(num_chunks):
-                      c_urls = unscraped_urls[i * chunk_size : (i + 1) * chunk_size]
-                      c_file = f"url_chunks/chunk_{i}.txt"
-                      with open(c_file, "w", encoding="utf-8") as f_out:
-                          f_out.write("\n".join(c_urls) + "\n")
-                  with open("url_chunks/count.txt", "w") as f_cnt:
-                      f_cnt.write(str(num_chunks))
-                  print(f"Saved {num_chunks} chunk files into url_chunks/ (~{chunk_size} URLs/runner)")
-          except Exception as ex_ftp:
-              print(f"FTP Resume check error: {ex_ftp}")
-          EOF
-
       - name: Build clean runner matrix
         id: build_matrix
         env:
@@ -163,18 +73,7 @@ jobs:
           import re
           from xml.etree import ElementTree as ET
 
-          # Check if url_chunks exist from Resume Mode
-          chunk_files = sorted(glob.glob("url_chunks/chunk_*.txt"))
-          if chunk_files:
-              matrix_items = [{"chunk_id": str(i), "is_resume": "true"} for i in range(len(chunk_files))]
-              matrix_json = json.dumps({"include": matrix_items})
-              print(f"Built Resume Matrix with {len(matrix_items)} jobs")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write(f"matrix={matrix_json}\n")
-                  f.write("has_url_chunks=true\n")
-              sys.exit(0)
-
-          # Fallback to standard sitemap-driven discovery
+          # Standard sitemap-driven discovery
           url = os.environ.get("BASE_URL", "https://www.unlimitedfurnituregroup.com").rstrip("/")
           total_input = int(os.environ.get("TOTAL_SITEMAPS", "0") or "0")
           per_job = int(os.environ.get("PER_JOB", "2") or "2")
@@ -370,55 +269,13 @@ jobs:
           import glob
           import os
           import csv
-          import ftplib
-          import io
 
-          resume_mode = os.environ.get("RESUME_MODE", "false").lower() in ("true", "1", "yes")
-          ftp_host = os.environ.get("FTP_HOST", "").strip()
-          ftp_user = os.environ.get("FTP_USER", "").strip()
-          ftp_pass = os.environ.get("FTP_PASS", "").strip()
-          ftp_port = int(os.environ.get("FTP_PORT", "21") or "21")
-          ftp_path = os.environ.get("FTP_PATH", "/scrap").rstrip("/")
-
-          existing_rows = []
+          chunk_files = glob.glob("chunks/**/unlimitedfurniture_products_chunk_*.csv", recursive=True)
+          rows = []
           header = None
           seen_urls = set()
 
-          # If FTP available, download previous full dataset
-          if ftp_host and ftp_user and ftp_pass:
-              try:
-                  ftp = ftplib.FTP()
-                  ftp.connect(ftp_host, ftp_port, timeout=30)
-                  ftp.login(ftp_user, ftp_pass)
-                  comp_dir = f"{ftp_path}/Unlimitedfurniture"
-                  date_dirs = sorted([d for d in ftp.nlst(comp_dir) if d.split('/')[-1].isdigit()])
-                  if date_dirs:
-                      latest_d = sorted(date_dirs)[-1]
-                      out_dir = f"{latest_d}/output"
-                      files = ftp.nlst(out_dir)
-                      scraped_finals = [f for f in files if "FinalScrappedData" in f and f.endswith(".csv")]
-                      if scraped_finals:
-                          latest_s = sorted(scraped_finals)[-1]
-                          print(f"Downloading previous dataset from FTP: {latest_s}")
-                          bio = io.BytesIO()
-                          ftp.retrbinary(f"RETR {latest_s}", bio.write)
-                          bio.seek(0)
-                          r = csv.reader(io.StringIO(bio.getvalue().decode('utf-8', errors='ignore')))
-                          header = next(r, None)
-                          for row in r:
-                              if row:
-                                  u = row[0].strip()
-                                  existing_rows.append(row)
-                                  seen_urls.add(u)
-                          print(f"Loaded {len(existing_rows):,} existing product rows from FTP ({len(seen_urls):,} unique URLs)")
-                  ftp.quit()
-              except Exception as e:
-                  print(f"FTP previous data load note: {e}")
-
-          # Collect newly scraped chunk CSVs
-          chunk_files = glob.glob("chunks/**/unlimitedfurniture_products_chunk_*.csv", recursive=True)
-          new_rows = []
-          for cf in chunk_files:
+          for cf in sorted(chunk_files):
               try:
                   with open(cf, "r", encoding="utf-8") as f:
                       r = csv.reader(f)
@@ -430,15 +287,11 @@ jobs:
                               u = row[0].strip()
                               if u not in seen_urls:
                                   seen_urls.add(u)
-                                  new_rows.append(row)
-              except Exception as ex_cf:
-                  print(f"Error reading {cf}: {ex_cf}")
+                                  rows.append(row)
+              except Exception as e:
+                  print(f"Error reading {cf}: {e}")
 
-          print(f"Found {len(chunk_files)} chunk files. Newly scraped unique rows: {len(new_rows):,}")
-
-          combined_rows = existing_rows + new_rows
-          print(f"Combined total products: {len(combined_rows):,}")
-
+          print(f"Merged {len(rows):,} products from {len(chunk_files)} chunk files.")
           if not header:
               header = [
                   "Ref Product URL", "Ref Product ID", "Ref Category", "Ref Category URL",
@@ -450,10 +303,10 @@ jobs:
           with open("unlimitedfurniture_products_full.csv", "w", newline="", encoding="utf-8") as f:
               w = csv.writer(f)
               w.writerow(header)
-              w.writerows(combined_rows)
+              w.writerows(rows)
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as fo:
-              fo.write(f"final_rows={len(combined_rows)}\n")
+              fo.write(f"final_rows={len(rows)}\n")
           EOF
 
       - name: Merge failure logs

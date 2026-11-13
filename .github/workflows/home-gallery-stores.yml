@@ -103,35 +103,10 @@ jobs:
                   urls = [line.strip() for line in f if line.strip() and line.strip().startswith("http")]
               print(f"Loaded {len(urls):,} URLs from local repository.")
 
-          # 2. Second priority: FTP pre-collected URLs file
-          if not urls:
-              ftp_host = os.environ.get("FTP_HOST", "").strip()
-              ftp_user = os.environ.get("FTP_USER", "").strip()
-              ftp_pass = os.environ.get("FTP_PASS", "").strip()
-              ftp_port = int(os.environ.get("FTP_PORT", "21") or "21")
-              ftp_path = os.environ.get("FTP_PATH", "/scrap/").strip().rstrip("/")
-
-              if ftp_host and ftp_user and ftp_pass:
-                  remote_file = f"{ftp_path}/urls/all_urls_{site_key}.txt"
-                  print(f"Attempting to download URLs from FTP: {remote_file}")
-                  try:
-                      client = ftplib.FTP()
-                      client.connect(ftp_host, ftp_port, timeout=30)
-                      client.login(ftp_user, ftp_pass)
-                      with open("temp_urls.txt", "wb") as f_out:
-                          client.retrbinary(f"RETR {remote_file}", f_out.write)
-                      client.quit()
-                      if os.path.exists("temp_urls.txt") and os.path.getsize("temp_urls.txt") > 0:
-                          with open("temp_urls.txt", "r", encoding="utf-8") as f:
-                              urls = [line.strip() for line in f if line.strip() and line.strip().startswith("http")]
-                          print(f"✓ Loaded {len(urls):,} URLs from FTP.")
-                  except Exception as e:
-                      print(f"⚠ Could not download from FTP: {e}")
-
-          # 3. Third priority: sitemap discovery
+          # Sitemap discovery
           if not urls:
               sitemap_index = "https://homegallerystores.com/sitemap/hgs/sitemap_index.xml.gz"
-              print(f"Falling back to sitemap discovery: {sitemap_index}")
+              print(f"Discovering URLs directly from sitemap: {sitemap_index}")
               headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
               req = urllib.request.Request(sitemap_index, headers=headers)
               root = ET.fromstring(gzip.decompress(urllib.request.urlopen(req).read()))

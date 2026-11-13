@@ -22,11 +22,6 @@ on:
         description: "Custom sitemap URL override (optional, single site only)"
         required: false
         default: ""
-      use_ftp_urls:
-        description: "Use pre-collected URL lists from FTP (/scrap/urls/) instead of crawling sitemaps"
-        type: boolean
-        required: false
-        default: true
       scrape_mode:
         description: "Scrape Mode: remaining (only unscraped pending URLs from DB) or full (all URLs)"
         type: choice
@@ -35,11 +30,6 @@ on:
         options:
           - "remaining"
           - "full"
-      resume_unscraped_only:
-        description: "Resume mode: only scrape remaining (Not Scraped) URLs from latest FTP tracking CSV"
-        type: boolean
-        required: false
-        default: false
       urls_per_runner:
         description: "Max product URLs to scrape per parallel runner (recommended 300-400 to complete well within 4h)"
         default: "350"
@@ -126,8 +116,6 @@ jobs:
           TARGET_SITE: ${{ github.event.inputs.target_site }}
           CUSTOM_URL: ${{ github.event.inputs.custom_url }}
           CUSTOM_SITEMAP: ${{ github.event.inputs.sitemap_url }}
-          USE_FTP_URLS: ${{ github.event.inputs.use_ftp_urls != 'false' }}
-          RESUME_UNSCRAPED_ONLY: ${{ github.event.inputs.resume_unscraped_only != 'false' && github.event.inputs.resume_unscraped_only != '' }}
           URLS_PER_RUNNER: ${{ github.event.inputs.urls_per_runner }}
           TOTAL_RUNNERS_PER_SITE: ${{ github.event.inputs.total_runners_per_site }}
           MAX_TOTAL_URLS: ${{ github.event.inputs.max_total_urls }}
@@ -145,22 +133,14 @@ jobs:
           import json
           import math
           import subprocess
-          import ftplib
           from urllib.parse import urlparse
 
           target = os.environ.get("TARGET_SITE", "ALL")
           custom_url = os.environ.get("CUSTOM_URL", "").strip()
           custom_sitemap = os.environ.get("CUSTOM_SITEMAP", "").strip()
-          use_ftp_urls = os.environ.get("USE_FTP_URLS", "true").lower() in ("true", "1", "yes")
-          resume_unscraped = os.environ.get("RESUME_UNSCRAPED_ONLY", "false").lower() in ("true", "1", "yes")
           urls_per_runner = int(os.environ.get("URLS_PER_RUNNER", "1500") or "1500")
           total_runners_input = int(os.environ.get("TOTAL_RUNNERS_PER_SITE", "0") or "0")
           max_total_urls = int(os.environ.get("MAX_TOTAL_URLS", "0") or "0")
-          ftp_host = os.environ.get("FTP_HOST", "").strip()
-          ftp_user = os.environ.get("FTP_USER", "").strip()
-          ftp_pass = os.environ.get("FTP_PASS", "").strip()
-          ftp_port = int(os.environ.get("FTP_PORT", "21") or "21")
-          ftp_path = os.environ.get("FTP_PATH", "/scrap").rstrip("/")
 
           all_sites = [
               {
@@ -218,55 +198,22 @@ jobs:
               site_url = s["url"]
               site_sitemap = custom_sitemap if (custom_sitemap and len(selected) == 1) else s["sitemap_url"]
               site_master_file = f"all_urls_{site_key}.txt"
-              urls_loaded_from_ftp = False
+              print(f"\n============================================================")
+              print(f" Discovering all product URLs from sitemap: {site_key} ({competitor})")
+              print(f" Base URL: {site_url}")
+              print(f" Sitemap: {site_sitemap}")
+              print(f"============================================================")
 
-              if use_ftp_urls:
-                  local_repo_file = f"urls/all_urls_{site_key}.txt"
-                  if os.path.exists(local_repo_file) and os.path.getsize(local_repo_file) > 0:
-                      import shutil
-                      shutil.copyfile(local_repo_file, site_master_file)
-                      print(f"✓ Loaded pre-collected URLs from repository ({os.path.getsize(site_master_file):,} bytes): {local_repo_file}")
-                      urls_loaded_from_ftp = True
-                  elif not (ftp_host and ftp_user and ftp_pass):
-                      print("⚠ FTP secrets not configured and local file not found. Falling back to sitemap discovery.")
-                  else:
-                      remote_url_file = f"{ftp_path}/urls/all_urls_{site_key}.txt"
-                      print(f"\n============================================================")
-                      print(f" Checking FTP for pre-collected URLs: {remote_url_file}")
-                      print(f" Site: {site_key} ({competitor})")
-                      print(f"============================================================")
-                      try:
-                          ftp = ftplib.FTP()
-                          ftp.connect(ftp_host, ftp_port, timeout=30)
-                          ftp.login(ftp_user, ftp_pass)
-                          with open(site_master_file, "wb") as f_out:
-                              ftp.retrbinary(f"RETR {remote_url_file}", f_out.write)
-                          ftp.quit()
-                          if os.path.exists(site_master_file) and os.path.getsize(site_master_file) > 0:
-                              print(f"✓ Successfully fetched pre-collected URLs from FTP ({os.path.getsize(site_master_file):,} bytes)")
-                              urls_loaded_from_ftp = True
-                          else:
-                              print("⚠ Downloaded file was empty, falling back to sitemap discovery.")
-                      except Exception as ex_ftp:
-                          print(f"⚠ Could not download URLs from FTP ({ex_ftp}), falling back to sitemap discovery.")
+              env_copy = os.environ.copy()
+              env_copy["CURR_URL"] = site_url
+              env_copy["SITE_NAME"] = site_key
+              env_copy["SITEMAP_URL"] = site_sitemap
+              env_copy["MASTER_URLS_FILE"] = site_master_file
+              env_copy["COLLECT_URLS_ONLY"] = "1"
 
-              if not urls_loaded_from_ftp:
-                  print(f"\n============================================================")
-                  print(f" Checking all sitemaps for site: {site_key} ({competitor})")
-                  print(f" Base URL: {site_url}")
-                  print(f" Sitemap: {site_sitemap}")
-                  print(f"============================================================")
-
-                  env_copy = os.environ.copy()
-                  env_copy["CURR_URL"] = site_url
-                  env_copy["SITE_NAME"] = site_key
-                  env_copy["SITEMAP_URL"] = site_sitemap
-                  env_copy["MASTER_URLS_FILE"] = site_master_file
-                  env_copy["COLLECT_URLS_ONLY"] = "1"
-
-                  res = subprocess.run([sys.executable, "drl/dlr_scraper.py"], env=env_copy)
-                  if res.returncode != 0:
-                      print(f"⚠ Warning: URL collection for {site_key} returned code {res.returncode}")
+              res = subprocess.run([sys.executable, "drl/dlr_scraper.py"], env=env_copy)
+              if res.returncode != 0:
+                  print(f"⚠ Warning: URL collection for {site_key} returned code {res.returncode}")
 
               if not os.path.exists(site_master_file):
                   print(f"⚠ No URL file generated for {site_key}, creating empty file.")
@@ -276,41 +223,7 @@ jobs:
               with open(site_master_file, "r", encoding="utf-8") as f:
                   urls = [line.strip() for line in f if line.strip() and line.strip().startswith("http")]
 
-              if resume_unscraped and ftp_host and ftp_user and ftp_pass:
-                  print(f"Checking FTP for latest un-scraped tracking data for {site_key} ({competitor})...")
-                  try:
-                      ftp = ftplib.FTP()
-                      ftp.connect(ftp_host, ftp_port, timeout=30)
-                      ftp.login(ftp_user, ftp_pass)
-                      comp_dir = f"{ftp_path}/{competitor}"
-                      date_dirs = sorted([d for d in ftp.nlst(comp_dir) if d.split('/')[-1].isdigit()])
-                      unscraped_found = False
-                      if date_dirs:
-                          for d in reversed(date_dirs):
-                              out_dir = f"{d}/output"
-                              try:
-                                  files = ftp.nlst(out_dir)
-                                  finals = [f for f in files if "FinalURLList" in f and f.endswith(".csv")]
-                                  if finals:
-                                      latest_final = sorted(finals)[-1]
-                                      import io, csv
-                                      bio = io.BytesIO()
-                                      ftp.retrbinary(f"RETR {latest_final}", bio.write)
-                                      bio.seek(0)
-                                      reader = csv.reader(io.StringIO(bio.getvalue().decode('utf-8', errors='ignore')))
-                                      unscraped_list = [row[0].strip() for row in reader if len(row) >= 2 and row[1].strip().lower() == "not scraped" and row[0].strip().startswith("http")]
-                                      if unscraped_list:
-                                          urls = unscraped_list
-                                          print(f"✓ Resume Mode: Loaded {len(urls):,} remaining 'Not Scraped' URLs from {latest_final}")
-                                          unscraped_found = True
-                                          break
-                              except Exception:
-                                  pass
-                      ftp.quit()
-                      if not unscraped_found:
-                          print(f"Note: No un-scraped items found in tracking files, using base URL list for {site_key}.")
-                  except Exception as e_res:
-                      print(f"Note: Resume check error for {site_key}: {e_res}")
+              print(f"✓ Discovered {len(urls):,} URLs from sitemap for {site_key}")
 
               if max_total_urls > 0 and max_total_urls < len(urls):
                   print(f"Limiting {site_key} to first {max_total_urls:,} URLs as requested")
