@@ -15,6 +15,17 @@ import logging
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+# Add repo root for db_queue
+REPO_ROOT = str(Path(__file__).parent.parent.parent)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 try:
     from utils.sitemap_processor import SitemapProcessor
 except ImportError:
@@ -604,6 +615,15 @@ class ProductFetcher(Spider):
         if self.verbose and sku:
             self.logger.info(f"💾 Extracted product: {sku} - {item.get('Ref Product Name', '')[:50]}...")
             
+        if HAS_DB_QUEUE:
+            try:
+                domain_val = getattr(self, "base_domain", "") or getattr(self, "website_url", "")
+                comp_name = "Home Gallery Stores" if "homegallery" in str(domain_val).lower() else "Coleman Furniture"
+                cid = 15177 if comp_name == "Home Gallery Stores" else 17028
+                save_scraped_product(comp_name, cid, dict(item))
+            except Exception:
+                pass
+
         yield item
 
     def extract_collection_name(self, content, brand_name):

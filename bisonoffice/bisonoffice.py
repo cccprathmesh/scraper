@@ -22,6 +22,17 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Add repository root for shared imports like db_queue
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 
 class BisonofficeScraper:
 
@@ -694,6 +705,18 @@ class BisonofficeScraper:
         ]
         with self.csv_lock:
             writer.writerow(row)
+        if HAS_DB_QUEUE:
+            try:
+                save_scraped_product("BisonOffice.com", 17927, {
+                    "url": row[0], "product_id": row[1], "variant_id": row[2],
+                    "category": row[3], "category_url": row[4], "brand": row[5],
+                    "name": row[6], "sku": row[7], "mpn": row[8], "gtin": row[9],
+                    "price": row[10], "image": row[11], "quantity": row[12],
+                    "group_attr_1": row[13], "group_attr_2": row[14],
+                    "status": row[15], "date_scraped": row[16]
+                })
+            except Exception:
+                pass
 
     def log_failure(self, url: str, reason: str):
         """Append a failed URL to the failure CSV."""
@@ -786,6 +809,18 @@ class BisonofficeScraper:
             
             with self.csv_lock:
                 writer.writerow(row)
+            if HAS_DB_QUEUE:
+                try:
+                    save_scraped_product("BisonOffice.com", 17927, {
+                        "url": row[0], "product_id": row[1], "variant_id": row[2],
+                        "category": row[3], "category_url": row[4], "brand": row[5],
+                        "name": row[6], "sku": row[7], "mpn": row[8], "gtin": row[9],
+                        "price": row[10], "image": row[11], "quantity": row[12],
+                        "group_attr_1": row[13], "group_attr_2": row[14],
+                        "status": row[15], "date_scraped": row[16]
+                    })
+                except Exception:
+                    pass
             
             with stats_lock:
                 stats['products_fetched'] += 1
@@ -908,6 +943,11 @@ class BisonofficeScraper:
                     urls = urls[:self.max_urls_per_sitemap]
                 else:
                     self.log(f"Found {len(urls)} product URLs")
+
+                if HAS_DB_QUEUE:
+                    init_c = len(urls)
+                    urls = filter_pending_urls("BisonOffice.com", urls, competitor_id=17927)
+                    self.log(f"MySQL DB Queue check: {init_c - len(urls):,} URLs already completed in DB. Remaining pending: {len(urls):,}")
 
                 # Create locks for thread-safe operations
                 seen_lock = threading.Lock()

@@ -7,6 +7,14 @@ on:
         description: "Base site URL"
         required: true
         default: "https://www.bisonoffice.com"
+      scrape_mode:
+        description: "Scrape Mode: remaining (only unscraped pending URLs from DB) or full (all URLs)"
+        type: choice
+        required: true
+        default: "remaining"
+        options:
+          - "remaining"
+          - "full"
       total_sitemaps:
         description: "Total sitemaps to process (0 = auto/10)"
         default: "0"
@@ -22,6 +30,14 @@ on:
       request_delay:
         description: "Delay between requests (seconds)"
         default: "1.0"
+
+env:
+  SCRAPE_MODE: ${{ github.event.inputs.scrape_mode || 'remaining' }}
+  MYSQL_HOST: "2.24.198.101"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "root"
+  MYSQL_PASS: "Root@123456"
+  MYSQL_DB: "google_shopping"
 
 jobs:
   # ============================================================
@@ -91,7 +107,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml
+          pip install requests beautifulsoup4 lxml pymysql
 
       - name: Run bisonoffice scraper
         env:

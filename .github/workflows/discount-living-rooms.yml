@@ -27,6 +27,14 @@ on:
         type: boolean
         required: false
         default: true
+      scrape_mode:
+        description: "Scrape Mode: remaining (only unscraped pending URLs from DB) or full (all URLs)"
+        type: choice
+        required: true
+        default: "remaining"
+        options:
+          - "remaining"
+          - "full"
       resume_unscraped_only:
         description: "Resume mode: only scrape remaining (Not Scraped) URLs from latest FTP tracking CSV"
         type: boolean
@@ -56,6 +64,14 @@ on:
       urls_per_sitemap:
         description: "Legacy: Max URLs per sitemap (0 = full scrape / unlimited)"
         default: "0"
+
+env:
+  SCRAPE_MODE: ${{ github.event.inputs.scrape_mode || 'remaining' }}
+  MYSQL_HOST: "2.24.198.101"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "root"
+  MYSQL_PASS: "Root@123456"
+  MYSQL_DB: "google_shopping"
 
 jobs:
   plan:
@@ -102,7 +118,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml
+          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml pymysql
 
       - name: Discover all sitemaps, count products, and partition runners
         id: generate_matrix
@@ -478,7 +494,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml
+          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml pymysql
 
       - name: Download URL chunks
         uses: actions/download-artifact@v4

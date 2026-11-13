@@ -3,6 +3,14 @@ name: Shopify - Product Scraper
 on:
   workflow_dispatch:
     inputs:
+      scrape_mode:
+        description: "Scrape Mode: 'remaining' (only pending/unscraped URLs in DB) or 'full' (all URLs)"
+        required: true
+        default: "remaining"
+        type: choice
+        options:
+          - remaining
+          - full
       url:
         description: "Base site URL (e.g., https://www.graysonliving.com)"
         required: true
@@ -25,6 +33,12 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
+  MYSQL_HOST: ${{ secrets.MYSQL_HOST || '2.24.198.101' }}
+  MYSQL_PORT: ${{ secrets.MYSQL_PORT || '3306' }}
+  MYSQL_USER: ${{ secrets.MYSQL_USER || 'root' }}
+  MYSQL_PASS: ${{ secrets.MYSQL_PASS || 'Root@123456' }}
+  MYSQL_DB: ${{ secrets.MYSQL_DB || 'google_shopping' }}
+  SCRAPE_MODE: ${{ github.event.inputs.scrape_mode || 'remaining' }}
 
 jobs:
   plan:
@@ -135,7 +149,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install cloudscraper curl-cffi requests lxml
+          pip install cloudscraper curl-cffi requests lxml pymysql
 
       - name: Run Cloudflare-resistant scraper
         env:
@@ -145,6 +159,12 @@ jobs:
           MAX_URLS_PER_SITEMAP: ${{ github.event.inputs.urls_per_sitemap }}
           MAX_WORKERS: ${{ github.event.inputs.max_workers }}
           REQUEST_DELAY_BASE: ${{ matrix.request_delay }}
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST || '2.24.198.101' }}
+          MYSQL_PORT: ${{ secrets.MYSQL_PORT || '3306' }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER || 'root' }}
+          MYSQL_PASS: ${{ secrets.MYSQL_PASS || 'Root@123456' }}
+          MYSQL_DB: ${{ secrets.MYSQL_DB || 'google_shopping' }}
+          SCRAPE_MODE: ${{ github.event.inputs.scrape_mode || 'remaining' }}
         run: |
           python shopify-scrapper/shopifyscrap-cloudflare.py
 

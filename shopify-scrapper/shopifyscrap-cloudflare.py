@@ -14,9 +14,31 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import json
 
+# Add repository root for shared imports like db_queue
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 # ================= ENV =================
 
 CURR_URL = os.getenv("CURR_URL", "").rstrip("/")
+COMPETITOR_NAME = os.getenv("COMPETITOR_NAME", "")
+if not COMPETITOR_NAME and CURR_URL:
+    if "franceandson" in CURR_URL.lower():
+        COMPETITOR_NAME = "France & Son"
+    elif "englishelm" in CURR_URL.lower():
+        COMPETITOR_NAME = "English Elm"
+    elif "afastores" in CURR_URL.lower():
+        COMPETITOR_NAME = "AFA Stores"
+    else:
+        COMPETITOR_NAME = CURR_URL.split("//")[-1].replace("www.", "").split(".")[0].title()
+
 SITEMAP_OFFSET = int(os.getenv("SITEMAP_OFFSET", "0"))
 MAX_SITEMAPS = int(os.getenv("MAX_SITEMAPS", "0"))
 MAX_URLS_PER_SITEMAP = int(os.getenv("MAX_URLS_PER_SITEMAP", "0"))
@@ -289,6 +311,18 @@ def process_product(url: str, writer, seen: set, crawl_delay=None):
 
         with csv_lock:
             writer.writerow(row)
+        if HAS_DB_QUEUE and COMPETITOR_NAME:
+            try:
+                save_scraped_product(COMPETITOR_NAME, None, {
+                    "url": row[0], "product_id": row[1], "name": row[2],
+                    "brand": row[3], "category": row[4], "variant_id": row[5],
+                    "sku": row[7], "mpn": row[8], "gtin": row[9],
+                    "price": row[10], "quantity": row[11],
+                    "group_attr_1": row[12], "group_attr_2": row[13],
+                    "status": row[14], "date_scraped": row[15]
+                })
+            except Exception:
+                pass
         variants_processed += 1
     
     log(f"Processed {variants_processed} variants from {product_url}")
@@ -454,6 +488,10 @@ def main():
             urls = [u for u in urls if u and "/products/" in u]
             
             log(f"  Found {len(urls)} URLs in sitemap")
+            if HAS_DB_QUEUE and COMPETITOR_NAME:
+                init_c = len(urls)
+                urls = filter_pending_urls(COMPETITOR_NAME, urls)
+                log(f"  MySQL DB Queue check: {init_c - len(urls):,} URLs already completed in DB. Remaining pending: {len(urls):,}")
             all_product_urls.extend([u for u in urls if u])
             
             if MAX_URLS_PER_SITEMAP and len(urls) > MAX_URLS_PER_SITEMAP:

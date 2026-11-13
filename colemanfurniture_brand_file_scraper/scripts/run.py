@@ -26,6 +26,17 @@ logging.getLogger("scrapy.downloadermiddlewares").setLevel(logging.WARNING)
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add repo root for db_queue
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from fetcher.product_fetcher import ProductFetcher
@@ -163,6 +174,16 @@ def main():
             logger.warning(f"No URLs found in urls-file: {args.urls_file}")
             logger.info(f"✅ Scraping completed. Output saved to: {output_file}")
             return output_file
+
+        if HAS_DB_QUEUE:
+            comp_name = "Home Gallery Stores" if "homegallery" in args.website_url.lower() else "Coleman Furniture"
+            cid = 15177 if comp_name == "Home Gallery Stores" else 17028
+            init_c = len(input_urls)
+            input_urls = filter_pending_urls(comp_name, input_urls, competitor_id=cid)
+            logger.info(f"MySQL DB Queue check: {init_c - len(input_urls):,} URLs already completed in DB. Remaining pending: {len(input_urls):,}")
+            if not input_urls:
+                logger.info(f"All {init_c:,} URLs already scraped in database! Exiting cleanly.")
+                return output_file
 
         logger.info(f"🔁 Retry mode enabled with {len(input_urls)} URLs from: {args.urls_file}")
         process.crawl(

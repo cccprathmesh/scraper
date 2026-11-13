@@ -262,16 +262,14 @@ WHERE
     )
     AND scraping_status = 'pending';
 
-SELECT scraping_status,
-    -- retry_count,
-    COUNT(*) as cnt
+SELECT scraping_status, priority, COUNT(*) as cnt
 FROM osb_products
 WHERE
     status = 1
 GROUP BY
-    -- retry_count,
+    priority,
     scraping_status
-    -- ORDER BY retry_count ASC, cnt DESC;
+ORDER BY priority ASC
 
 UPDATE osb_products
 SET
@@ -348,8 +346,7 @@ SELECT
     google_seller_page_full_url
 FROM google_shopping_results
 WHERE
-    google_seller_page_full_url LIKE "%share.google%"
-    AND google_seller_page_full_url IS NULL
+    google_seller_page_full_url LIKE "%share.google%";
 
 UPDATE osb_products
 SET
@@ -389,7 +386,7 @@ SELECT scraping_status,
 FROM osb_products
 WHERE
     status = 1
-    AND priority != 0
+    AND scraping_status != 'completed'
 GROUP BY
     -- retry_count,
     scraping_status
@@ -411,3 +408,50 @@ WHERE
             is_osb_url_imported = 0
     )
 ORDER BY updated_at DESC
+
+UPDATE osb_products
+SET
+    is_osb_url_imported = 1
+WHERE
+    product_id IN (
+        SELECT product_id (
+                SELECT product_id,
+                FROM google_shopping_results
+                WHERE
+                    COALESCE(
+                        google_seller_page_full_url, ''
+                    ) != ''
+                    AND osb_url_match = 'Yes'
+                    AND product_id IN (
+                        SELECT product_id
+                        FROM osb_products
+                        WHERE
+                            is_osb_url_imported = 0
+                    )
+            ) as A
+    );
+-- ORDER BY updated_at DESC
+
+UPDATE osb_products
+SET
+    priority = 1
+WHERE
+    product_id IN (
+        SELECT product_id
+        FROM (
+                SELECT product_id
+                FROM osb_products
+                WHERE
+                    status = 1
+                    AND scraping_status != 'completed'
+            ) AS A
+    );
+
+UPDATE osb_products
+SET
+    status = 0,
+    scraping_status = 'pending',
+    priority = 0,
+    retry_count = 0,
+    claimed_at = NULL,
+    claimed_by = NULL;

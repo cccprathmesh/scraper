@@ -1175,10 +1175,11 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict):
             if uploader:
                 uploader.on_item_scraped(stats['products_fetched'], file_handle=csv_file_handle)
 
-        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+        if HAS_DB_QUEUE:
             try:
                 save_scraped_product(COMPETITOR_NAME, None, {
                     "url": product_url,
+                    "product_id": product_info.get("product_id"),
                     "name": product_info.get("name"),
                     "sku": product_info.get("sku"),
                     "brand": product_info.get("brand"),
@@ -1187,8 +1188,8 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict):
                     "image": product_info.get("main_image"),
                     "status": product_info.get("status")
                 })
-            except Exception:
-                pass
+            except Exception as _dbe:
+                log(f"DB save warning: {_dbe}", "DEBUG")
         
         log(f"Fetched product {product_info['product_id']}: {product_info['name'][:50]}...", "INFO")
         
@@ -1370,8 +1371,8 @@ def main():
             urls_to_process = [line.strip() for line in uf if line.strip() and line.strip().startswith("http")]
         log(f"Product URLs assigned to this chunk from {URLS_FILE}: {len(urls_to_process):,}")
 
-        # Filter against MySQL Queue if DB credentials are provided
-        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+        # Filter against MySQL Queue
+        if HAS_DB_QUEUE:
             initial_count = len(urls_to_process)
             urls_to_process = filter_pending_urls(COMPETITOR_NAME, urls_to_process)
             log(f"MySQL DB Queue check: {initial_count - len(urls_to_process):,} URLs already completed in DB. Remaining pending: {len(urls_to_process):,}")
@@ -1445,6 +1446,8 @@ def main():
                 log(f"Chunk {CHUNK_INDEX} out of range for {total_discovered} URLs. Exiting.", "WARNING")
                 sys.exit(0)
             urls_to_process = discovered_urls[start_idx:end_idx]
+            if HAS_DB_QUEUE:
+                urls_to_process = filter_pending_urls(COMPETITOR_NAME, urls_to_process)
             log(f"URL Chunking Active: Chunk {CHUNK_INDEX + 1}/{TOTAL_CHUNKS} -> processing {len(urls_to_process)} URLs ({start_idx} to {end_idx} of {total_discovered})")
         else:
             if SITEMAP_OFFSET >= len(sitemaps):

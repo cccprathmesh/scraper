@@ -10,4 +10,14 @@ google-shopping/
 __pycache__/
 *.DS_Store
 .vscode/
+scripts/prepare_remaining_runs.py
 config/accounts_config.json
+ssh.key
+*.key
+scrapers/
+resume_data/
+output/
+scratch/
+archive/
+.DS_Store
+

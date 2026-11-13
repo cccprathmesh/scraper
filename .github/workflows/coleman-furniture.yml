@@ -13,6 +13,14 @@ on:
           - "API"
           - "Sitemap"
           - "Direct URLs"
+      scrape_mode:
+        description: "Scrape Mode: remaining (only unscraped pending URLs from DB) or full (all URLs)"
+        type: choice
+        required: true
+        default: "remaining"
+        options:
+          - "remaining"
+          - "full"
       ftp_filename:
         description: "CSV path on FTP server (e.g., input_urls/coleman FTP urls.csv or emma-mason.csv)"
         required: false
@@ -84,6 +92,12 @@ env:
   MAX_ROUNDS:       ${{ github.event.inputs.max_rounds }}
   CURRENT_ROUND:    ${{ github.event.inputs.current_round }}
   REMAINING_RUN_ID: ${{ github.event.inputs.remaining_run_id }}
+  SCRAPE_MODE:      ${{ github.event.inputs.scrape_mode || 'remaining' }}
+  MYSQL_HOST:       ${{ secrets.MYSQL_HOST || '2.24.198.101' }}
+  MYSQL_PORT:       ${{ secrets.MYSQL_PORT || '3306' }}
+  MYSQL_USER:       ${{ secrets.MYSQL_USER || 'root' }}
+  MYSQL_PASS:       ${{ secrets.MYSQL_PASS || 'Root@123456' }}
+  MYSQL_DB:         ${{ secrets.MYSQL_DB || 'google_shopping' }}
 
 jobs:
 
@@ -132,7 +146,7 @@ jobs:
           if [ -f "colemanfurniture_brand_file_scraper/requirements.txt" ]; then
             pip install -r colemanfurniture_brand_file_scraper/requirements.txt
           else
-            pip install scrapy pandas lxml requests beautifulsoup4
+            pip install scrapy pandas lxml requests beautifulsoup4 pymysql
           fi
 
       - name: Build matrix
@@ -256,7 +270,7 @@ jobs:
           if [ -f "colemanfurniture_brand_file_scraper/requirements.txt" ]; then
             pip install -r colemanfurniture_brand_file_scraper/requirements.txt
           else
-            pip install scrapy pandas lxml requests beautifulsoup4
+            pip install scrapy pandas lxml requests beautifulsoup4 pymysql
           fi
 
       - name: Create output directory

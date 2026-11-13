@@ -32,6 +32,12 @@ try:
 except Exception:
     HAS_FTP_MANAGER = False
 
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 # ================= BYPASS MODULES =================
 
 try:
@@ -1032,6 +1038,19 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict, crawl
             if uploader:
                 uploader.on_item_scraped(stats['products_fetched'], file_handle=csv_file_handle)
 
+        if HAS_DB_QUEUE:
+            try:
+                save_scraped_product("Emma Mason", 16060, {
+                    "url": row[0], "product_id": row[1], "variant_id": row[2],
+                    "category": row[3], "category_url": row[4], "brand": row[5],
+                    "name": row[6], "sku": row[7], "mpn": row[8], "gtin": row[9],
+                    "price": row[10], "image": row[11], "quantity": row[12],
+                    "group_attr_1": row[13], "group_attr_2": row[14],
+                    "status": row[15], "additional_data": row[16], "date_scraped": row[17]
+                })
+            except Exception:
+                pass
+
         log(f"Fetched product {product_info['product_id']}: {product_info['name'][:50]}...", "INFO")
 
     except Exception as e:
@@ -1243,6 +1262,11 @@ def main():
                     assigned_urls = assigned_urls[:MAX_URLS_PER_SITEMAP]
 
                 all_product_urls = list(assigned_urls)
+                if HAS_DB_QUEUE:
+                    init_c = len(all_product_urls)
+                    all_product_urls = filter_pending_urls("Emma Mason", all_product_urls, competitor_id=16060)
+                    log(f"MySQL DB Queue check: {init_c - len(all_product_urls):,} URLs already completed in DB. Remaining pending: {len(all_product_urls):,}")
+
                 log(f"Product URLs assigned to this chunk: {len(all_product_urls):,}")
 
                 try:

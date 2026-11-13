@@ -24,6 +24,17 @@ except ImportError:
     import requests
     HAS_CURL_CFFI = False
 
+# Add repository root for shared imports like db_queue
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+try:
+    from db_queue import filter_pending_urls, save_scraped_product
+    HAS_DB_QUEUE = True
+except Exception:
+    HAS_DB_QUEUE = False
+
 
 class unlimitedFurnitureScraper:
 
@@ -469,6 +480,18 @@ class unlimitedFurnitureScraper:
         ]
         with self.csv_lock:
             writer.writerow(row)
+        if HAS_DB_QUEUE:
+            try:
+                save_scraped_product("Unlimited Furniture", 18096, {
+                    "url": row[0], "product_id": row[1], "category": row[2],
+                    "category_url": row[3], "brand": row[4], "name": row[5],
+                    "sku": row[6], "mpn": row[7], "gtin": row[8],
+                    "price": row[9], "image": row[10], "quantity": row[11],
+                    "group_attr_1": row[12], "group_attr_2": row[13],
+                    "status": row[14], "date_scraped": row[15]
+                })
+            except Exception:
+                pass
 
     def log_failure(self, url: str, reason: str):
         """Append a failed URL to the failure CSV."""
@@ -608,6 +631,10 @@ class unlimitedFurnitureScraper:
                     candidate_products.append(u)
 
             self.log(f"Loaded {len(candidate_products)} candidate product URLs to scrape ({self.stats['plp_urls_skipped']} PLPs skipped)")
+            if HAS_DB_QUEUE:
+                init_c = len(candidate_products)
+                candidate_products = filter_pending_urls("Unlimited Furniture", candidate_products, competitor_id=18096)
+                self.log(f"MySQL DB Queue check: {init_c - len(candidate_products):,} URLs already completed in DB. Remaining pending: {len(candidate_products):,}")
             with open(output_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(self.csv_header)
@@ -679,6 +706,11 @@ class unlimitedFurnitureScraper:
                 else:
                     self.log(f"Found {len(candidate_products)} candidate product URLs in sitemap")
                     urls_to_scrape = candidate_products
+
+                if HAS_DB_QUEUE:
+                    init_c = len(urls_to_scrape)
+                    urls_to_scrape = filter_pending_urls("Unlimited Furniture", urls_to_scrape, competitor_id=18096)
+                    self.log(f"MySQL DB Queue check: {init_c - len(urls_to_scrape):,} URLs already completed in DB. Remaining pending: {len(urls_to_scrape):,}")
 
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = [

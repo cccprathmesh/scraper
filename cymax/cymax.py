@@ -625,7 +625,7 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict, crawl
         with csv_lock:
             writer.writerow(row)
 
-        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+        if HAS_DB_QUEUE:
             try:
                 save_scraped_product(COMPETITOR_NAME, None, {
                     "url": product_url,
@@ -637,8 +637,8 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict, crawl
                     "image": product.get("image"),
                     "status": product.get("availability")
                 })
-            except Exception:
-                pass
+            except Exception as _dbe:
+                log(f"DB save note: {_dbe}", "DEBUG")
 
         with stats_lock:
             stats["products_fetched"] += 1
@@ -719,8 +719,8 @@ def main():
         end = start + URL_LIMIT if URL_LIMIT > 0 else len(all_product_urls)
         urls_to_process = all_product_urls[start:end]
 
-        # Filter against MySQL Queue if DB credentials are provided
-        if HAS_DB_QUEUE and os.getenv("MYSQL_HOST"):
+        # Filter against MySQL Queue
+        if HAS_DB_QUEUE:
             init_c = len(urls_to_process)
             urls_to_process = filter_pending_urls(COMPETITOR_NAME, urls_to_process)
             log(f"MySQL DB Queue check: {init_c - len(urls_to_process):,} URLs already completed in DB. Remaining pending: {len(urls_to_process):,}")

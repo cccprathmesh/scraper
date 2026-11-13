@@ -11,6 +11,14 @@ on:
         description: "Direct Sitemap URL (optional, skips auto-discovery)"
         required: false
         default: ""
+      scrape_mode:
+        description: "Scrape Mode: 'remaining' (only pending/unscraped URLs in DB) or 'full' (all URLs)"
+        required: true
+        default: "remaining"
+        type: choice
+        options:
+          - remaining
+          - full
       urls_per_runner:
         description: "Max product URLs to scrape per parallel runner"
         default: "1500"
@@ -45,6 +53,12 @@ env:
   FTP_USER: ${{ secrets.FTP_USER }}
   FTP_PASS: ${{ secrets.FTP_PASS }}
   FTP_PATH: ${{ secrets.FTP_PATH || '/scrap/' }}
+  MYSQL_HOST: ${{ secrets.MYSQL_HOST || '2.24.198.101' }}
+  MYSQL_PORT: ${{ secrets.MYSQL_PORT || '3306' }}
+  MYSQL_USER: ${{ secrets.MYSQL_USER || 'root' }}
+  MYSQL_PASS: ${{ secrets.MYSQL_PASS || 'Root@123456' }}
+  MYSQL_DB: ${{ secrets.MYSQL_DB || 'google_shopping' }}
+  SCRAPE_MODE: ${{ github.event.inputs.scrape_mode || 'remaining' }}
 
 jobs:
   plan:
@@ -102,7 +116,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml
+          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml pymysql pymysql
 
       - name: Discover all sitemaps and count products
         id: discover_urls
@@ -124,11 +138,17 @@ jobs:
           TOTAL_RUNNERS: ${{ github.event.inputs.total_runners }}
           MAX_TOTAL_URLS: ${{ github.event.inputs.max_total_urls }}
           CURR_URL: ${{ github.event.inputs.url }}
+          SCRAPE_MODE: ${{ github.event.inputs.scrape_mode || 'remaining' }}
         run: |
           python3 -c "import textwrap, sys; exec(textwrap.dedent(sys.stdin.read()))" << 'EOF'
           import os
           import json
           import math
+          sys.path.insert(0, ".")
+          try:
+              from db_queue import filter_pending_urls
+          except ImportError:
+              filter_pending_urls = None
 
           urls_file = "emmamason_all_urls.txt"
           if not os.path.exists(urls_file):
@@ -138,8 +158,25 @@ jobs:
           with open(urls_file, "r", encoding="utf-8") as f:
               urls = [line.strip() for line in f if line.strip() and line.strip().startswith("http")]
 
+          total_discovered = len(urls)
+          print(f"Total product URLs collected across all sitemaps: {total_discovered:,}")
+
+          scrape_mode = os.environ.get("SCRAPE_MODE", "remaining").strip().lower()
+          if filter_pending_urls:
+              try:
+                  urls = filter_pending_urls("Emma Mason", urls, competitor_id=17027, mode=scrape_mode)
+                  print(f"[{scrape_mode.upper()} MODE] URLs to scrape after DB filter: {len(urls):,}")
+              except Exception as e:
+                  print(f"DB URL filter failed ({e}), proceeding with all URLs")
+
           total_urls = len(urls)
-          print(f"Total product URLs collected across all sitemaps: {total_urls:,}")
+          if total_urls == 0:
+              print("All URLs already scraped in DB! No runners needed.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("matrix=[]\n")
+                  f.write("total_urls=0\n")
+                  f.write("chunk_count=0\n")
+              sys.exit(0)
 
           max_total = int(os.environ.get("MAX_TOTAL_URLS", "0") or "0")
           if max_total > 0 and max_total < total_urls:
@@ -259,7 +296,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml
+          pip install requests beautifulsoup4 curl_cffi cloudscraper lxml pymysql
 
       - name: Download URL chunks
         uses: actions/download-artifact@v4
