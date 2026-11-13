@@ -316,6 +316,27 @@ jobs:
                   print(f"Limiting {site_key} to first {max_total_urls:,} URLs as requested")
                   urls = urls[:max_total_urls]
 
+              scrape_mode = os.environ.get("SCRAPE_MODE", "remaining").strip().lower()
+              if scrape_mode == "remaining":
+                  try:
+                      import db_queue
+                      canonical_name = {
+                          "discountlivingrooms": "Discount Living Rooms",
+                          "bedroomfurniturediscounts": "Bedroom Furniture Discounts",
+                          "diningroomsoutlet": "Dining Rooms Outlet",
+                          "tvstandsoutlet": "TV Stands Outlet"
+                      }.get(site_key, competitor)
+                      canonical_id = {
+                          "discountlivingrooms": 17025,
+                          "bedroomfurniturediscounts": 17024,
+                          "diningroomsoutlet": 17026,
+                          "tvstandsoutlet": 17031
+                      }.get(site_key, None)
+                      urls = db_queue.filter_pending_urls(canonical_name, urls, competitor_id=canonical_id, mode=scrape_mode)
+                      print(f"[{scrape_mode.upper()} MODE] {site_key} URLs to scrape after DB filter: {len(urls):,}")
+                  except Exception as ex_db:
+                      print(f"⚠ Could not filter DB pending URLs ({ex_db}), using all URLs.")
+
               print(f"Loaded {len(urls):,} URLs for {site_key} ({competitor})")
               site_data.append({
                   "site_key": site_key,
@@ -327,6 +348,14 @@ jobs:
 
           total_all_urls = sum(len(d["urls"]) for d in site_data)
           print(f"\nTotal product URLs across all selected sites: {total_all_urls:,}")
+
+          if total_all_urls == 0:
+              print("All URLs already scraped in DB! No runners needed.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("matrix=[]\n")
+                  f.write("total_urls=0\n")
+                  f.write("chunk_count=0\n")
+              sys.exit(0)
 
           # GitHub Actions matrix maximum limit is 256 jobs. We safely cap at 250 parallel runners.
           MAX_MATRIX_JOBS = 250
