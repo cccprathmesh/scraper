@@ -297,8 +297,8 @@ def main():
     targets = [
         ("Discount Living Rooms", 15311, "output/discountlivingrooms/FinalScrappedData_DRL_PARTIAL_20261105_093845.csv", "urls/all_urls_discountlivingrooms_remaining.txt"),
         ("Dining Rooms Outlet", 19434, "archive/old/dro.csv", "all_urls_diningroomsoutlet.txt"),
-        ("Coleman Furniture - Jackson", 17028, "archive/merge/Coleman - Jackson.csv", None),
-        ("Coleman Furniture - Catnapper", 17028, "archive/merge/coleman - Catnapper.csv", None),
+        ("Coleman Furniture", 17028, "archive/merge/Coleman - Jackson.csv", None),
+        ("Coleman Furniture", 17028, "archive/merge/coleman - Catnapper.csv", None),
     ]
 
     for comp_name, comp_id, sc_csv, url_file in targets:
@@ -312,3 +312,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
