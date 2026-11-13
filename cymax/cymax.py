@@ -29,6 +29,36 @@ except Exception:
 # ================= ENV =================
 
 CURR_URL = os.getenv("CURR_URL", "https://www.cymax.com").rstrip("/")
+
+def get_competitor_name_from_url(url: str = "") -> str:
+    explicit = os.getenv("COMPETITOR_NAME", "").strip()
+    if explicit:
+        return explicit
+    target = (url or CURR_URL or "").lower()
+    if "homesquare" in target:
+        return "Homesquare"
+    elif "cymax" in target:
+        return "Cymax"
+    netloc = urlparse(target).netloc.replace("www.", "").split(".")[0]
+    return netloc.capitalize() if netloc else "Cymax"
+
+COMPETITOR_NAME = get_competitor_name_from_url(CURR_URL)
+
+def filter_urls_by_competitor(urls: list, mode: str = None) -> list:
+    if not urls:
+        return []
+    if not HAS_DB_QUEUE:
+        return urls
+    by_comp = {}
+    for u in urls:
+        c = get_competitor_name_from_url(u)
+        by_comp.setdefault(c, []).append(u)
+    
+    result = []
+    for c, c_urls in by_comp.items():
+        pending = filter_pending_urls(c, c_urls, mode=mode)
+        result.extend(pending)
+    return result
 SITEMAP_INDEX = f"{CURR_URL}/sitemap.xml"
 SITEMAP_OFFSET = int(os.getenv("SITEMAP_OFFSET", "0"))
 MAX_SITEMAPS = int(os.getenv("MAX_SITEMAPS", "0"))
@@ -627,7 +657,8 @@ def process_product_data(product_url: str, writer, seen: set, stats: dict, crawl
 
         if HAS_DB_QUEUE:
             try:
-                save_scraped_product(COMPETITOR_NAME, None, {
+                comp = get_competitor_name_from_url(product_url)
+                save_scraped_product(comp, None, {
                     "url": product_url,
                     "name": product.get("title"),
                     "sku": product.get("sku"),
@@ -722,7 +753,7 @@ def main():
         # Filter against MySQL Queue
         if HAS_DB_QUEUE:
             init_c = len(urls_to_process)
-            urls_to_process = filter_pending_urls(COMPETITOR_NAME, urls_to_process)
+            urls_to_process = filter_urls_by_competitor(urls_to_process)
             log(f"MySQL DB Queue check: {init_c - len(urls_to_process):,} URLs already completed in DB. Remaining pending: {len(urls_to_process):,}")
 
         log(
@@ -824,6 +855,12 @@ def main():
         # limit = 0 means "all remaining"
         end = start + MAX_URLS_PER_SITEMAP if MAX_URLS_PER_SITEMAP > 0 else total_urls
         urls_to_process = urls[start:end]
+
+        # Filter against MySQL Queue & register URLs
+        if HAS_DB_QUEUE and urls_to_process:
+            init_c = len(urls_to_process)
+            urls_to_process = filter_urls_by_competitor(urls_to_process)
+            log(f"MySQL DB Queue check: {init_c - len(urls_to_process):,} URLs already completed in DB. Remaining pending: {len(urls_to_process):,}")
 
         log(f"Sitemap contains {total_urls} product URLs. Processing {len(urls_to_process)} URLs (offset {start})")
         if not urls_to_process:
@@ -950,6 +987,15 @@ def main():
         # Deduplicate while preserving order
         unique_urls = list(dict.fromkeys(all_urls))
 
+        # Register all discovered sitemap URLs into MySQL competitor_urls table
+        if HAS_DB_QUEUE and unique_urls:
+            try:
+                log(f"Registering {len(unique_urls):,} sitemap URLs into MySQL competitor_urls table...")
+                filter_urls_by_competitor(unique_urls, mode="full")
+                log(f"✓ Successfully registered all {len(unique_urls):,} URLs in competitor_urls table.")
+            except Exception as ex_db:
+                log(f"⚠ Warning: Could not register URLs to DB: {ex_db}", "WARNING")
+
         with open(MASTER_URLS_FILE, "w", encoding="utf-8") as f:
             for url in unique_urls:
                 f.write(url + "\n")
@@ -1066,6 +1112,16 @@ def main():
                 log(f"Limited to {len(urls)} out of {original_count} URLs")
             else:
                 log(f"Found {len(urls)} product URLs in this sitemap")
+
+            # Register URLs into competitor_urls & filter against MySQL Queue
+            if HAS_DB_QUEUE and urls:
+                init_c = len(urls)
+                urls = filter_urls_by_competitor(urls)
+                log(f"MySQL DB Queue check: {init_c - len(urls):,} URLs already completed in DB. Remaining pending: {len(urls):,}")
+
+            if not urls:
+                log(f"All URLs in sitemap already completed in DB. Skipping.")
+                continue
 
             with ThreadPoolExecutor(max_workers=EFFECTIVE_MAX_WORKERS) as executor:
                 semaphore = threading.Semaphore(MAX_QUEUE_SIZE)
