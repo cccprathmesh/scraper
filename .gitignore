@@ -18,6 +18,12 @@ scrapers/
 resume_data/
 output/
 scratch/
+urls/
+all_urls_*.txt
+url_chunks/
+url_list_*.txt
+*.txt.gz
 archive/
 .DS_Store
+
 

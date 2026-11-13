@@ -95,18 +95,9 @@ jobs:
           os.makedirs("url_chunks", exist_ok=True)
           urls = []
 
-          # 1. First priority: local pre-collected URLs file
-          local_file = f"urls/all_urls_{site_key}.txt"
-          if os.path.exists(local_file) and os.path.getsize(local_file) > 0:
-              print(f"✓ Found local URL list: {local_file}")
-              with open(local_file, "r", encoding="utf-8") as f:
-                  urls = [line.strip() for line in f if line.strip() and line.strip().startswith("http")]
-              print(f"Loaded {len(urls):,} URLs from local repository.")
-
           # Sitemap discovery
-          if not urls:
-              sitemap_index = "https://homegallerystores.com/sitemap/hgs/sitemap_index.xml.gz"
-              print(f"Discovering URLs directly from sitemap: {sitemap_index}")
+          sitemap_index = "https://homegallerystores.com/sitemap/hgs/sitemap_index.xml.gz"
+          print(f"Discovering URLs directly from sitemap: {sitemap_index}")
               headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
               req = urllib.request.Request(sitemap_index, headers=headers)
               root = ET.fromstring(gzip.decompress(urllib.request.urlopen(req).read()))
@@ -447,8 +438,6 @@ jobs:
           URL_FILE="all_sitemap_urls_homegallerystores.txt"
           if [ -f "master_urls/all_urls_homegallerystores.txt" ]; then
             cp "master_urls/all_urls_homegallerystores.txt" "$URL_FILE"
-          elif [ -f "urls/all_urls_homegallerystores.txt" ]; then
-            cp "urls/all_urls_homegallerystores.txt" "$URL_FILE"
           else
             touch "$URL_FILE"
           fi
